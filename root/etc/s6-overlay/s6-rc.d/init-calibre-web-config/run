@@ -1,49 +1,42 @@
 #!/usr/bin/with-contenv bash
+# shellcheck shell=bash
 
 # create symlinks for imagemagick policy.xml
-[[ -f /etc/ImageMagick-6/policy.xml ]] && \
-    rm /etc/ImageMagick-6/policy.xml
-[[ ! -L /etc/ImageMagick-6/policy.xml ]] && \
-    ln -s /defaults/policy.xml /etc/ImageMagick-6/policy.xml
-
-# create symlinks for database and log
-[[ ! -f /config/app.db ]] && \
-    cp /defaults/app.db /config/app.db
-[[ -f /app/calibre-web/app.db ]] && \
-    rm /app/calibre-web/app.db
-[[ ! -L /app/calibre-web/app.db ]] && \
-    ln -s /config/app.db /app/calibre-web/app.db
-
-# create symlinks for log
-[[ ! -f /config/calibre-web.log ]] && \
-    touch /config/calibre-web.log
-[[ -f /app/calibre-web/calibre-web.log ]] && \
-    rm /app/calibre-web/calibre-web.log
-[[ ! -L /app/calibre-web/calibre-web.log ]] && \
-    ln -s /config/calibre-web.log /app/calibre-web/calibre-web.log
+rm -rf /etc/ImageMagick-6/policy.xml
+ln -s /defaults/policy.xml /etc/ImageMagick-6/policy.xml
 
 # create Google drive client_secrets.json file
-[[ ! -f /config/client_secrets.json ]] && \
+if [[ ! -f /config/client_secrets.json ]]; then
     echo "{}" > /config/client_secrets.json
-[[ -f /app/calibre-web/client_secrets.json ]] &&
-    rm /app/calibre-web/client_secrets.json
-[[ ! -L /app/calibre-web/client_secrets.json ]] &&
-    ln -s /config/client_secrets.json /app/calibre-web/client_secrets.json
-
-# create Google drive symlinks for database
-[[ ! -f /config/gdrive.db ]] && \
-    cp /app/calibre-web/gdrive.db /config/gdrive.db
-[[ -f /app/calibre-web/gdrive.db ]] && \
-    rm /app/calibre-web/gdrive.db
-[[ ! -L /app/calibre-web/gdrive.db ]] && \
-    ln -s /config/gdrive.db /app/calibre-web/gdrive.db
+fi
 
 # check if kepubify is present and if so make executable
-[[ -f /usr/bin/kepubify ]] && \
-[[ ! -x /usr/bin/kepubify ]] && \
+if [[ -f /usr/bin/kepubify ]] && [[ ! -x /usr/bin/kepubify ]]; then
     chmod +x /usr/bin/kepubify
+fi
+
+# Pre-stage some files & directories for permissions purposes
+mkdir -p /app/calibre-web/cps/cache
 
 # permissions
-chown -R abc:abc \
+lsiown -R abc:abc \
     /config \
-    /app/calibre-web
+    /app/calibre-web/cps/cache
+
+export CALIBRE_DBPATH=/config
+
+if [[ ! -f /config/app.db ]]; then
+  echo "First time run, creating app.db..."
+  cd /app/calibre-web && s6-setuidgid abc python3 /app/calibre-web/cps.py -d > /dev/null 2>&1
+  # handle app.db updates for kepubify and ext binary path
+  # borrowed from crocodilestick because it's a better solution than what i was doing
+  sqlite3 /config/app.db <<EOS
+    update settings set config_kepubifypath='/usr/bin/kepubify' where config_kepubifypath is NULL or LENGTH(config_kepubifypath)=0;
+EOS
+
+  if [[ $? == 0 ]]; then
+    echo "Successfully set kepubify paths in '/config/app.db'!"
+  elif [[ $? > 0 ]]; then
+    echo "Could not set binary paths for '/config/app.db' (see errors above)."
+  fi
+fi
